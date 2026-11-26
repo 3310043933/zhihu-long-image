@@ -1,0 +1,17 @@
+{
+  "name": "zhihu-long-image",
+  "version": "1.8.0",
+  "private": true,
+  "description": "知乎前 X 条回答导出高清长图，提供油猴脚本和 Chrome Manifest V3 扩展",
+  "author": "jasonLi",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "test": "node verify.cjs && node scripts/verify-extension.cjs && node scripts/verify-release.cjs",
+    "package": "node scripts/package.cjs",
+    "configure-release": "node scripts/configure-release.cjs"
+  }
+}

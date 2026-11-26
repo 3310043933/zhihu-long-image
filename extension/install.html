@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>安装与更新 · 知乎回答长图</title><link rel="stylesheet" href="install.css"></head>
+<body><main>
+  <header><span class="badge">jasonLi · 开源工具</span><h1>保存回答，<br>留住值得读的内容。</h1><p>知乎回答长图 · <span id="version">当前版本</span><br>PNG / SVG / HTML / PDF / WebP</p></header>
+  <section class="repository"><label for="repo">GitHub 仓库</label><form id="repository-form"><input id="repo" placeholder="粘贴仓库链接或 owner/repo" required autocomplete="off"><button type="submit">生成安装链接</button></form><p id="repository-status" role="status">发布后会自动绑定仓库；本地预览可先输入你的仓库地址。</p></section>
+  <section class="cards">
+    <article><div class="number">01 / 推荐</div><h2>油猴脚本</h2><p>适合已经安装 Tampermonkey 的用户。安装一次，后续由油猴按设置检查更新。</p><a id="install-script" class="primary" aria-disabled="true">安装 / 更新油猴脚本</a><ol><li>先安装 <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener noreferrer">Tampermonkey</a>。</li><li>点击上面的按钮，在油猴安装页确认。</li><li>刷新知乎问题页，右下角开始使用。</li></ol><p class="tip">没有弹出安装页？下载 .user.js 后，从油猴管理面板导入即可。旧版本手动粘贴安装的用户，建议从这个入口重新安装一次。</p></article>
+    <article><div class="number">02 / Chrome · Edge</div><h2>浏览器扩展</h2><p>不需要油猴。当前提供开发者模式加载版，设置保存在浏览器本地。</p><a id="install-extension" class="primary secondary" aria-disabled="true">下载扩展安装包</a><ol><li>解压 ZIP，找到 manifest.json 所在目录。</li><li>打开 <code>chrome://extensions/</code> 或 <code>edge://extensions/</code>。</li><li>启用开发者模式，选择“加载已解压的扩展程序”。</li></ol><p class="tip">更新：下载新包，解压覆盖原安装目录，在扩展管理页点击“重新加载”，再刷新知乎。此版本不会后台自动替换扩展代码。</p></article>
+  </section>
+  <section class="updates"><h2>更新与排查</h2><p>升级前通常不用卸载，可保留已有本地设置。油猴和扩展二选一启用，避免重复面板。</p><div class="links"><a id="release-notes" aria-disabled="true">查看最新版本与更新记录 ↗</a><a id="source" aria-disabled="true">下载项目源码 ↗</a><a id="issues" aria-disabled="true">反馈问题 ↗</a></div><p class="tip">若下载提示404，请先在仓库发布首个 Release。GitHub Pages 只提供安装说明，真正的版本包来自你的 GitHub Releases。</p></section>
+  <footer>只处理当前账号可见的知乎内容 · 本地生成文件 · 不含统计服务<br><a id="privacy" href="PRIVACY.md">隐私说明</a> · <a id="license" href="LICENSE">MIT License</a></footer>
+</main><script src="install-config.js"></script><script src="install.js"></script></body></html>
