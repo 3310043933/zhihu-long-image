@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
-let source = fs.readFileSync(path.join(root, 'zhihu-long-image.user.js'), 'utf8');
+let source = fs.readFileSync(path.join(root, 'zhihu-long-image.user.js'), 'utf8').replace(/\r\n/g, '\n');
 const version = require('../package.json').version;
 const repository = JSON.parse(fs.readFileSync(path.join(root, 'release-config.json'), 'utf8')).repository;
 if (repository && !/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('release-config仓库名无效。');

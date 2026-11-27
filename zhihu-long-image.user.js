@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎前 X 条回答导出长图
 // @namespace    local.zhihu.long-image
-// @version      1.8.0
+// @version      1.9.0
 // @author       jasonLi
 // @description  导出前 X 条或单条知乎回答（含问题），支持 PNG、SVG、HTML、PDF、WebP
 // @match        https://www.zhihu.com/*
@@ -12,6 +12,10 @@
 // @grant        GM_setValue
 // @connect      zhimg.com
 // @connect      *.zhimg.com
+// @connect      zhihu.com
+// @connect      *.zhihu.com
+// @connect      vzuu.com
+// @connect      *.vzuu.com
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -25,6 +29,7 @@
     WIDTH: 900, // 长图排版宽度（CSS 像素）
     SCALE: 2, // 清晰度倍率：整数 1～4；不再因内容过长自动降低
     FORMAT: 'png', // png / svg / html / pdf / webp；也可以在面板下拉框选择
+    HTML_INTERACTIVE: true, // HTML保留音视频入口和可展开的段落评论/回复
     PDF_KEEP_IMAGES: true, // PDF图片不跨页，超高图片等比缩小至一页内
     PANEL_COLLAPSED: false, // 面板收起状态，修改后自动记忆
     WEBP_QUALITY: 0.95, // WebP有损压缩质量；图片尺寸保持不变
@@ -52,6 +57,7 @@
   let scaleInput;
   let formatInput;
   let formatNote;
+  let htmlOptions, htmlInteractiveInput;
   let pdfOptions;
   let pdfKeepInput;
   let launcher;
@@ -109,6 +115,7 @@
     if (Number.isSafeInteger(settings.ANSWER_COUNT) && settings.ANSWER_COUNT > 0) CONFIG.ANSWER_COUNT = settings.ANSWER_COUNT;
     if ([1, 2, 3, 4].includes(settings.SCALE)) CONFIG.SCALE = settings.SCALE;
     if (['png', 'svg', 'html', 'pdf', 'webp'].includes(settings.FORMAT)) CONFIG.FORMAT = settings.FORMAT;
+    if (typeof settings.HTML_INTERACTIVE === 'boolean') CONFIG.HTML_INTERACTIVE = settings.HTML_INTERACTIVE;
     if (typeof settings.PDF_KEEP_IMAGES === 'boolean') CONFIG.PDF_KEEP_IMAGES = settings.PDF_KEEP_IMAGES;
     if (typeof settings.PANEL_COLLAPSED === 'boolean') CONFIG.PANEL_COLLAPSED = settings.PANEL_COLLAPSED;
   }
@@ -124,11 +131,13 @@
       if (Number.isSafeInteger(count) && count > 0) CONFIG.ANSWER_COUNT = count;
       CONFIG.SCALE = Number(scaleInput.value);
       CONFIG.FORMAT = formatInput.value;
+      CONFIG.HTML_INTERACTIVE = htmlInteractiveInput.checked;
       CONFIG.PDF_KEEP_IMAGES = pdfKeepInput.checked;
     }
     const settings = {
       ANSWER_COUNT: Number.isSafeInteger(count) && count > 0 ? count : CONFIG.ANSWER_COUNT,
       SCALE: Number(scaleInput.value), FORMAT: formatInput.value, PDF_KEEP_IMAGES: pdfKeepInput.checked,
+      HTML_INTERACTIVE: htmlInteractiveInput.checked,
       PANEL_COLLAPSED: CONFIG.PANEL_COLLAPSED,
     };
     try {
@@ -209,9 +218,16 @@
       const computed = getComputedStyle(original);
       visualStyles.set(copies[index], { opacity: computed.opacity, filter: computed.filter, 'mix-blend-mode': computed.mixBlendMode });
     });
+    if (htmlInteractive() && typeof getComputedStyle === 'function') originals.forEach((original, index) => {
+      if (original.localName !== 'span') return;
+      const computed = getComputedStyle(original);
+      if (/dotted|dashed/.test(computed.borderBottomStyle) && parseFloat(computed.borderBottomWidth) > 0) copies[index].classList.add('zli-original-underline');
+    });
     body.classList.add('zli-body');
     body.querySelectorAll('script, style, noscript, button, .ContentItem-actions, .RichContent-actions').forEach(el => el.remove());
-    body.querySelectorAll('video, iframe, audio, canvas').forEach(el => el.replaceWith(node('p', '【视频、音频或交互内容，请打开原回答查看】', 'zli-note')));
+    const originalMedia = [...content.querySelectorAll('video, iframe, audio, canvas')];
+    body.querySelectorAll('video, iframe, audio, canvas').forEach((el, index) => el.replaceWith(htmlInteractive() && /^(video|audio)$/.test(el.localName)
+      ? mediaCopy(originalMedia[index]) : node('p', '【视频、音频或交互内容，请打开原回答查看】', 'zli-note')));
     copiedImages.forEach((img, index) => {
       const original = sourceImages[index];
       const lazyURL = original?.getAttribute('data-original') || original?.getAttribute('data-actualsrc') || original?.getAttribute('data-src');
@@ -240,6 +256,224 @@
     }
     return body;
   }
+
+  // 导出的交互只使用原生 media/details，不携带知乎脚本。
+  const htmlInteractive = () => CONFIG.FORMAT === 'html' && CONFIG.HTML_INTERACTIVE;
+  function mediaURL(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+    try {
+      if (/^data:(audio|video)\/[\w.+-]+;base64,[a-z\d+/=\s]+$/i.test(raw || '')) return raw;
+      const url = new URL(raw, location.href);
+      return url.protocol === 'https:' && !url.username && !url.password ? url.href : '';
+    } catch { return ''; }
+  }
+  function originalLink(id, text = '打开原回答') {
+    const link = node('a', text);
+    link.href = `https://www.zhihu.com/question/${activeQuestion}${id ? `/answer/${id}` : ''}`;
+    return link;
+  }
+  function mediaCopy(original) {
+    const box = node('figure', undefined, 'zli-media');
+    const tag = original.localName === 'audio' ? 'audio' : 'video';
+    const sources = [original.currentSrc, original.getAttribute('src'), ...[...original.querySelectorAll('source')].map(s => s.src)]
+      .map(mediaURL).filter(Boolean);
+    if (sources.length) {
+      const player = node(tag); player.controls = true; player.preload = 'none';
+      for (const src of [...new Set(sources)]) { const source = node('source'); source.src = src; player.append(source); }
+      box.append(player, node('figcaption', sources.every(s => s.startsWith('data:')) ? '内嵌音视频' : '音视频需联网播放，链接可能过期；无法播放时请打开原回答。', 'zli-note'));
+    } else box.append(node('p', '未能读取可播放地址（可能是临时 blob、加密或尚未加载的媒体），请打开原回答播放。', 'zli-note zli-incomplete'));
+    box.append(originalLink(''));
+    return box;
+  }
+
+  // 只允许当前知乎同源、指定资源的请求；分页链接不能改变资源或段落。
+  async function readZhihuJSON(raw, options = {}) {
+    check();
+    const url = new URL(raw, location.href);
+    if (url.origin !== 'https://www.zhihu.com' || !/^\/api\/v4\/(?:answers\/\d+|comment_v5\/(?:answers\/\d+\/segment\/root_comment|comment\/[\w-]+\/child_comment)|video\/play_info)$/.test(url.pathname)) throw new Error('无效的内容读取地址');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const cancellation = setInterval(() => { if (cancelled || questionID() !== activeQuestion) controller.abort(); }, 150);
+    try {
+      const response = await fetch(url.href, { ...options, credentials: 'same-origin', redirect: 'error', signal: controller.signal });
+      if (!response.ok) throw new Error(`知乎返回 ${response.status}，可能需要登录或暂时限制访问`);
+      if (Number(response.headers.get('content-length')) > 2 * 1024 * 1024) throw new Error('内容响应过大');
+      const text = await response.text();
+      if (text.length > 2 * 1024 * 1024) throw new Error('内容响应过大');
+      check(); return JSON.parse(text);
+    } finally { clearTimeout(timeout); clearInterval(cancellation); }
+  }
+  async function commentPages(url, budget) {
+    const first = new URL(url, location.href), visited = new Set(), ids = new Set(), rows = [];
+    let next = first.href, incomplete = '';
+    try {
+      while (next) {
+        check();
+        if (visited.has(next) || visited.size >= 50 || budget.remaining-- <= 0) throw new Error('达到读取上限或分页重复');
+        visited.add(next);
+        const current = new URL(next, first);
+        if (current.origin !== first.origin || current.pathname !== first.pathname || current.searchParams.get('segment_id') !== first.searchParams.get('segment_id')) throw new Error('分页地址不匹配');
+        const page = await readZhihuJSON(current.href);
+        if (!Array.isArray(page.data)) throw new Error('评论响应结构不受支持');
+        let added = 0;
+        for (const row of page.data) {
+          const id = String(row.id || '');
+          if (!id || ids.has(id)) continue;
+          ids.add(id); rows.push(row); added++;
+        }
+        if (page.paging?.is_end === true) break;
+        if (!page.paging?.next || !added) throw new Error('分页未完整返回');
+        next = new URL(page.paging.next, first).href;
+        await pause(180);
+      }
+    } catch (error) { check(); incomplete = error.message || '读取失败'; }
+    return { rows, incomplete };
+  }
+  function commentElement(comment) {
+    const entry = node('div', undefined, 'zli-comment');
+    const author = comment.author?.member || comment.author;
+    const reply = comment.reply_to_author?.member || comment.reply_to_author;
+    const date = Number(comment.created_time);
+    entry.append(node('div', `${author?.name || '匿名用户'}${reply?.name ? ` 回复 ${reply.name}` : ''}${date > 0 && Number.isFinite(date) ? ` · ${new Date(date * 1000).toLocaleString()}` : ''}`, 'zli-meta'));
+    // 评论内容通过惰性template解析，仅复制文本/排版/链接；不激活任何外部资源或事件。
+    const template = document.createElement('template'); template.innerHTML = String(comment.content || '');
+    const copy = (from, to) => {
+      for (const child of from.childNodes) {
+        if (child.nodeType === 3) { to.append(document.createTextNode(child.textContent)); continue; }
+        if (child.nodeType !== 1 || /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|SVG|MATH|FORM)$/.test(child.tagName)) continue;
+        const tag = child.localName;
+        if (tag === 'img') { to.append(document.createTextNode(child.getAttribute('alt') || '[图片]')); continue; }
+        const target = node(/^(p|br|strong|b|em|i|u|s|blockquote|ul|ol|li|code|pre|a)$/.test(tag) ? tag : 'span');
+        if (tag === 'a') { try { const url = new URL(child.getAttribute('href'), location.href); if (/^https?:$/.test(url.protocol)) target.href = url.href; } catch { /* 无效链接 */ } }
+        copy(child, target); to.append(target);
+      }
+    };
+    copy(template.content, entry);
+    return entry;
+  }
+  function segmentRecords(value, records, depth = 0, collection = false) {
+    if (!value || typeof value !== 'object' || depth > 10 || records.size >= 100) return;
+    const id = value.segment_id ?? value.segmentId ?? value.seg_id ?? value.segId ?? (collection && value.position ? value.id : undefined);
+    if (id && /^[\w-]{1,160}$/.test(String(id))) records.set(String(id), { ...records.get(String(id)), id: String(id), text: String(value.content || value.text || records.get(String(id))?.text || ''), position: value.position });
+    for (const [key, child] of Object.entries(value).slice(0, 1000)) if (typeof child === 'object') segmentRecords(child, records, depth + 1, collection || /segments|annotations/i.test(key));
+  }
+  function markSegment(body, record) {
+    if (record.mark) return record.mark;
+    let position = record.position;
+    try { if (typeof position === 'string') position = JSON.parse(position); } catch { return null; }
+    if (!position?.start || !position?.end) return null;
+    const paragraphs = [...body.querySelectorAll('[data-pid]')];
+    const start = paragraphs.find(p => p.getAttribute('data-pid') === String(position.start.paragraph_id));
+    const end = paragraphs.find(p => p.getAttribute('data-pid') === String(position.end.paragraph_id));
+    if (!start || !end || !Number.isSafeInteger(position.start.offset) || !Number.isSafeInteger(position.end.offset)) return null;
+    const point = (paragraph, offset) => {
+      if (offset < 0) return null;
+      const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (offset <= text.length) return [text, offset];
+        offset -= text.length;
+      }
+      return null;
+    };
+    const a = point(start, position.start.offset), b = point(end, position.end.offset);
+    if (!a || !b) return null;
+    try {
+      const range = document.createRange(); range.setStart(...a); range.setEnd(...b);
+      // 仅给完整对应的原文加链接标记，位置失效时仍在回答末尾保留评论。
+      if (!range.toString() || (record.text && range.toString() !== record.text)) return null;
+      const mark = node('span'); mark.append(range.extractContents()); range.insertNode(mark); return mark;
+    } catch { return null; }
+  }
+  async function enrichHTMLInteractions(answer, item) {
+    if (!htmlInteractive()) return;
+    const aid = answerID(answer), body = item.querySelector('.zli-body');
+    if (!body) return;
+    body.querySelectorAll('.zli-media > a').forEach(link => { link.href = originalLink(aid).href; });
+    // 知乎视频卡片尚未创建video时，通过播放信息接口读取地址；不请求视频文件本身。
+    for (const card of [...body.querySelectorAll('a.video-box, a[data-video-id], a[href*="zhihu.com/video/"]')]) {
+      check();
+      const id = card.getAttribute('data-video-id') || (card.getAttribute('href') || '').match(/\/video\/(\d+)/)?.[1];
+      if (!/^\d+$/.test(id || '') || !aid) continue;
+      const box = node('figure', undefined, 'zli-media');
+      try {
+        report('正在读取视频播放入口…');
+        const info = await readZhihuJSON(`/api/v4/video/play_info?r=${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-app-za': 'OS=webplayer' }, body: JSON.stringify({ content_id: aid, content_type_str: 'answer', video_id: id, scene_code: 'answer_detail_web', is_only_video: true }) });
+        const choices = info.video_play?.playlist?.mp4 || [];
+        const selected = [...choices].sort((a, b) => Number(b.bitrate) - Number(a.bitrate)).flatMap(choice => Array.isArray(choice.url) ? choice.url : [choice.url]).map(mediaURL).find(Boolean);
+        if (!selected) throw new Error('播放地址不可用');
+        const player = node('video'); player.controls = true; player.preload = 'none'; player.src = selected;
+        box.append(player, node('p', '视频需联网播放，链接可能过期；无法播放时请打开原回答。', 'zli-note'));
+      } catch { check(); box.append(node('p', '未能读取视频地址，请打开原回答播放。', 'zli-note zli-incomplete')); }
+      box.append(originalLink(aid)); card.replaceWith(box);
+    }
+    const records = new Map(), attrs = ['data-segment-id', 'data-seg-id', 'data-segid', 'data-annotation-id'];
+    for (const mark of body.querySelectorAll(attrs.map(attr => `[${attr}]`).join(','))) {
+      if (records.size >= 100) break;
+      const id = attrs.map(attr => mark.getAttribute(attr)).find(Boolean);
+      if (/^[\w-]{1,160}$/.test(id)) records.set(id, { id, text: textOf(mark), mark });
+    }
+    // 仅查看当前回答的初始状态，避免把其他回答的段评错误关联。
+    try {
+      const initial = JSON.parse(document.getElementById('js-initialData')?.textContent || '{}');
+      const state = initial.initialState?.entities?.answers?.[aid];
+      segmentRecords(state?.reaction, records);
+      segmentRecords(state?.annotations, records, 0, true);
+      segmentRecords(state?.segments, records, 0, true);
+    } catch { /* 没有可用的初始状态 */ }
+    const marked = body.querySelector('.zli-original-underline, [class*="Highlight"], [class*="highlight"], [class*="Segment"], [class*="segment"], [class*="Annotation"], [data-annotation-id]');
+    if (!records.size && marked && /^\d+$/.test(aid)) {
+      try { segmentRecords((await readZhihuJSON(`/api/v4/answers/${aid}?include=reaction`)).reaction, records); }
+      catch { check(); }
+    }
+    if (!records.size) {
+      if (marked) { const note = node('p', '检测到划线，但未取得段落标识，段落评论和回复未完整保存。可先在知乎打开划线评论再重试。', 'zli-note zli-incomplete'); note.append(originalLink(aid)); item.append(note); }
+      return;
+    }
+    const section = node('section', undefined, 'zli-annotations');
+    section.append(node('h3', '划线段落评论与回复（导出时快照）'));
+    if (records.size >= 100) section.append(node('p', '达到100个划线段评的读取上限，可能还有段评未保存。', 'zli-note zli-incomplete'));
+    const budget = { remaining: 200 };
+    let index = 0;
+    for (const record of records.values()) {
+      check(); index++;
+      report(`正在读取划线段落评论和回复 ${index}/${records.size}…`);
+      const detail = node('details'); detail.id = `zli-segment-${aid}-${index}`;
+      const summary = node('summary', `划线 ${index}：${record.text.slice(0, 160) || '段落评论'}`); detail.append(summary);
+      record.mark = markSegment(body, record);
+      if (record.mark) {
+        record.mark.classList.add('zli-underlined');
+        const anchor = node('a', ` [查看段评 ${index}]`); anchor.href = `#${detail.id}`; record.mark.after(anchor);
+      }
+      if (record.text) detail.append(node('blockquote', record.text));
+      const roots = await commentPages(`/api/v4/comment_v5/answers/${aid}/segment/root_comment?segment_id=${encodeURIComponent(record.id)}&limit=20&offset=`, budget);
+      let count = roots.rows.length, incomplete = Boolean(roots.incomplete);
+      for (const comment of roots.rows) {
+        check(); const entry = commentElement(comment);
+        const embedded = Array.isArray(comment.child_comments) ? comment.child_comments : [];
+        const replies = new Map(embedded.map(reply => [String(reply.id), reply]));
+        let replyError = '';
+        if (/^[\w-]+$/.test(String(comment.id)) && (Number(comment.child_comment_count) > 0 || embedded.length > 0)) {
+          const result = await commentPages(`/api/v4/comment_v5/comment/${comment.id}/child_comment?limit=20&offset=`, budget);
+          for (const reply of result.rows) replies.set(String(reply.id), reply);
+          replyError = result.incomplete;
+          if (Number(comment.child_comment_count) > replies.size) replyError ||= '回复数量不足';
+        }
+        if (replies.size) {
+          const children = node('details', undefined, 'zli-replies'); children.append(node('summary', `展开 ${replies.size} 条回复`));
+          for (const reply of replies.values()) children.append(commentElement(reply));
+          entry.append(children); count += replies.size;
+        }
+        if (replyError) { incomplete = true; entry.append(node('p', `回复未完整保存：${replyError}。`, 'zli-note zli-incomplete')); }
+        detail.append(entry);
+      }
+      summary.append(document.createTextNode(` · 已保存 ${count} 条评论/回复${incomplete ? '（未完整）' : ''}`));
+      if (roots.incomplete) detail.append(node('p', `段评未完整保存：${roots.incomplete}。`, 'zli-note zli-incomplete'));
+      else if (!roots.rows.length) detail.append(node('p', '接口未返回可见评论。'));
+      detail.append(originalLink(aid, '回知乎查看最新讨论')); section.append(detail);
+    }
+    item.append(section);
+  }
+
 
   function snapshot(answer, index) {
     const content = answer.querySelector('.RichContent-inner .RichText')
@@ -346,6 +580,7 @@
         const copy = snapshot(answer, items.length + 1);
         // 不跳过无正文的回答，防止把后面的条目冒充成前 X 条。
         if (!copy) throw new Error('有回答未能读取正文。请确认已登录、展开正文并刷新页面后重试。');
+        await enrichHTMLInteractions(answer, copy);
         if (id) ids.add(id);
         elements.add(answer);
         items.push(copy);
@@ -795,7 +1030,96 @@
     return results;
   }
 
-  function portableDocument(root) {
+  function allowedMediaURL(raw) {
+    try {
+      const url = new URL(raw);
+      return url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443')
+        && /(^|\.)(zhihu\.com|zhimg\.com|vzuu\.com)$/.test(url.hostname);
+    } catch { return false; }
+  }
+  async function fetchMediaBlob(url) {
+    check();
+    if (url.startsWith('data:')) return (await fetch(url)).blob();
+    if (!allowedMediaURL(url)) throw new Error('该媒体不属于支持的知乎媒体域名');
+    return new Promise((resolve, reject) => {
+      let done = false, request, timer;
+      const finish = (error, blob) => { if (done) return; done = true; clearInterval(timer); error ? reject(error) : resolve(blob); };
+      timer = setInterval(() => { if (cancelled || questionID() !== activeQuestion) { request?.abort?.(); finish(new Error('已取消')); } }, 150);
+      request = GM_xmlhttpRequest({ method: 'GET', url, responseType: 'blob', timeout: 60000, anonymous: true,
+        zliMedia: true,
+        onprogress: event => {
+          report(`正在下载音视频：${formatBytes(event.loaded || 0)}${event.total ? ` / ${formatBytes(event.total)}` : ''}…`);
+          if (event.loaded > 32 * 1024 * 1024) { request?.abort?.(); finish(new Error('单个音视频超过32MB')); }
+        },
+        onload: response => {
+          const blob = response.response;
+          if (response.status < 200 || response.status >= 300 || !blob || typeof blob.arrayBuffer !== 'function' || !blob.size) return finish(new Error('音视频响应无效'));
+          if (blob.size > 32 * 1024 * 1024) return finish(new Error('单个音视频超过32MB'));
+          if (!/^(audio|video)\//.test(blob.type)) return finish(new Error('媒体类型不支持，可能是分段或加密播放流'));
+          finish(null, blob);
+        }, onerror: error => finish(new Error(error?.message || '音视频下载失败')), ontimeout: () => finish(new Error('音视频下载超时')), onabort: () => finish(new Error('音视频下载已取消')),
+      });
+    });
+  }
+  async function bundleHTMLMedia(root) {
+    const players = [...root.querySelectorAll('.zli-media video, .zli-media audio')], files = [], cache = new Map();
+    let total = 0, done = 0;
+    for (const player of players) {
+      check(); report(`正在下载离线音视频 ${++done}/${players.length}…`);
+      const urls = [player.getAttribute('src'), ...[...player.querySelectorAll('source')].map(source => source.getAttribute('src'))].filter(Boolean);
+      let saved, lastError;
+      for (const url of urls) {
+        try {
+          if (cache.has(url)) { saved = cache.get(url); break; }
+          if (total >= 128 * 1024 * 1024) throw new Error('音视频总大小达到128MB上限');
+          const blob = await fetchMediaBlob(url); check();
+          if (blob.size > 32 * 1024 * 1024 || total + blob.size > 128 * 1024 * 1024) throw new Error('超过音视频大小上限（单个32MB、合计128MB）');
+          const mime = blob.type.split(';')[0].toLowerCase();
+          const ext = ({'video/mp4':'mp4','video/webm':'webm','video/ogg':'ogv','audio/mpeg':'mp3','audio/mp3':'mp3','audio/mp4':'m4a','audio/x-m4a':'m4a','audio/wav':'wav','audio/x-wav':'wav','audio/ogg':'ogg','audio/webm':'webm','audio/aac':'aac','audio/flac':'flac'})[mime];
+          if (!ext) throw new Error(`不支持的离线媒体类型：${mime}`);
+          saved = { name: `media/media-${String(files.length + 1).padStart(3, '0')}.${ext}`, blob };
+          files.push(saved); cache.set(url, saved); total += blob.size; break;
+        } catch (error) { check(); lastError = error; }
+      }
+      const box = player.closest('.zli-media');
+      box.querySelectorAll('.zli-note,figcaption').forEach(note => note.remove());
+      if (saved) {
+        player.removeAttribute('src'); player.querySelectorAll('source').forEach(source => source.remove());
+        player.setAttribute('src', saved.name);
+        box.append(node('figcaption', `已下载，可离线播放 · ${formatBytes(saved.blob.size)}`));
+      } else player.replaceWith(node('p', `音视频未能下载：${lastError?.message || '地址不可用'}。请打开原回答播放。`, 'zli-note zli-incomplete'));
+    }
+    return { files, hasMedia: players.length > 0 };
+  }
+  // 媒体已压缩，ZIP采用Store避免重复压缩；分块计算CRC以保持取消/界面响应。
+  async function mediaZIP(files) {
+    if (files.length > 65535 || files.reduce((sum, file) => sum + file.blob.size, 0) > 512 * 1024 * 1024) throw new Error('离线ZIP超过512MB或文件数上限，请减少导出回答数。');
+    const chunks = [], central = [], encoder = new TextEncoder(); let offset = 0, centralSize = 0;
+    for (const file of files) {
+      check();
+      const name = encoder.encode(file.name); let crc = 0xffffffff;
+      for (let at = 0; at < file.blob.size; at += 1024 * 1024) {
+        const bytes = new Uint8Array(await file.blob.slice(at, at + 1024 * 1024).arrayBuffer());
+        for (const byte of bytes) crc = crcTable[(crc ^ byte) & 255] ^ (crc >>> 8);
+        check(); await pause(0);
+      }
+      crc = (crc ^ 0xffffffff) >>> 0;
+      const local = new Uint8Array(30), view = new DataView(local.buffer);
+      view.setUint32(0, 0x04034b50, true); view.setUint16(4, 20, true); view.setUint16(6, 0x800, true); view.setUint16(12, 0x21, true);
+      view.setUint32(14, crc, true); view.setUint32(18, file.blob.size, true); view.setUint32(22, file.blob.size, true); view.setUint16(26, name.length, true);
+      chunks.push(local, name, file.blob);
+      const entry = new Uint8Array(46), index = new DataView(entry.buffer);
+      index.setUint32(0, 0x02014b50, true); index.setUint16(4, 20, true); index.setUint16(6, 20, true); index.setUint16(8, 0x800, true); index.setUint16(14, 0x21, true);
+      index.setUint32(16, crc, true); index.setUint32(20, file.blob.size, true); index.setUint32(24, file.blob.size, true); index.setUint16(28, name.length, true); index.setUint32(42, offset, true);
+      central.push(entry, name); centralSize += entry.length + name.length; offset += local.length + name.length + file.blob.size;
+    }
+    const end = new Uint8Array(22), view = new DataView(end.buffer);
+    view.setUint32(0, 0x06054b50, true); view.setUint16(8, files.length, true); view.setUint16(10, files.length, true); view.setUint32(12, centralSize, true); view.setUint32(16, offset, true);
+    return new Blob([...chunks, ...central, end], { type: 'application/zip' });
+  }
+
+  function portableDocument(root, mediaFiles = []) {
+    const mediaPaths = new Set(mediaFiles.map(file => file.name));
     const copy = root.cloneNode(true);
     copy.querySelectorAll('script, iframe, object, embed, form, button, input, select, textarea, link, base, meta').forEach(el => el.remove());
     for (const el of [copy, ...copy.querySelectorAll('*')]) {
@@ -807,12 +1131,15 @@
       for (const [property, value] of visual) {
         if (value && !/url\s*\(|[<>]/i.test(value)) el.style.setProperty(property, value, 'important');
       }
-      if (el.hasAttribute('src') && !(el.tagName === 'IMG' && /^data:image\//i.test(el.getAttribute('src') || ''))) el.removeAttribute('src');
+      const src = el.getAttribute('src') || '';
+      const media = htmlInteractive() && /^(AUDIO|VIDEO|SOURCE)$/.test(el.tagName) && el.closest('.zli-media') && (mediaURL(src)?.startsWith('data:') || mediaPaths.has(src));
+      if (el.hasAttribute('src') && !(el.tagName === 'IMG' && /^data:image\//i.test(src)) && !media) el.removeAttribute('src');
       for (const name of ['href', 'xlink:href']) if (el.hasAttribute(name)) {
         const href = el.getAttribute(name);
         const isLink = el.localName.toLowerCase() === 'a';
         if (!(href.startsWith('#') || (isLink && /^https?:\/\//i.test(href)) || (!isLink && /^data:image\//i.test(href)))) el.removeAttribute(name);
-        else if (isLink) { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
+        else if (isLink && !href.startsWith('#')) { el.setAttribute('target', '_blank'); el.setAttribute('rel', 'noopener noreferrer'); }
+        else if (isLink) el.removeAttribute('target');
       }
     }
     const rules = css.textContent.match(/#zli-stage[^{}]*\{[^{}]*\}/g) || [];
@@ -846,18 +1173,26 @@
   async function exportDocument(root, format) {
     if (format === 'html' || format === 'svg') {
       report(`正在生成 ${format.toUpperCase()}，保留真实文字和内嵌图片…`);
-      const { copy, styles } = portableDocument(root);
+      const bundle = format === 'html' && htmlInteractive() ? await bundleHTMLMedia(root) : { files: [], hasMedia: false };
+      const { copy, styles } = portableDocument(root, bundle.files);
       const width = CONFIG.WIDTH;
       let height = Math.ceil(root.getBoundingClientRect().height);
       if (format === 'html') {
         const doc = document.implementation.createHTMLDocument('知乎回答导出 · jasonLi');
         const charset = doc.createElement('meta'); charset.setAttribute('charset', 'utf-8');
         const csp = doc.createElement('meta'); csp.httpEquiv = 'Content-Security-Policy';
-        csp.content = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src 'none'; base-uri 'none'; form-action 'none'";
+        csp.content = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; media-src 'self' file: data:; font-src 'none'; base-uri 'none'; form-action 'none'";
         const viewport = doc.createElement('meta'); viewport.name = 'viewport'; viewport.content = 'width=device-width, initial-scale=1';
         const style = doc.createElement('style'); style.textContent = styles;
         doc.head.prepend(charset, csp, viewport); doc.head.append(style); doc.body.append(copy);
-        return [{ blob: new Blob(['<!doctype html>\n', doc.documentElement.outerHTML], { type: 'text/html;charset=utf-8' }), width, height }];
+        const html = new Blob(['<!doctype html>\n', doc.documentElement.outerHTML], { type: 'text/html;charset=utf-8' });
+        if (bundle.hasMedia) {
+          report('正在打包离线HTML和音视频…');
+          const readme = new Blob(['请先完整解压ZIP，再用Chrome/Edge打开index.html。不要直接在压缩包内打开。\nmedia/内为已下载的音视频；请保持目录结构。段评为导出时快照。下载失败的媒体已在主页面标明。\n'], { type: 'text/plain;charset=utf-8' });
+          const blob = await mediaZIP([{ name: 'index.html', blob: html }, ...bundle.files, { name: 'README.txt', blob: readme }]);
+          return [{ blob, width, height, extension: 'zip', mediaCount: bundle.files.length }];
+        }
+        return [{ blob: html, width, height }];
       }
       // 使用导出文件自身的样式重新测量，避免移除知乎样式后SVG高度不够而截断。
       const frame = document.createElement('iframe');
@@ -939,12 +1274,14 @@
     splitStart.style.display = raster ? '' : 'none';
     start.textContent = raster ? '单张高清长图' : `导出 ${format.toUpperCase()}`;
     scaleInput.disabled = busy || format === 'html' || format === 'svg';
+    htmlOptions.style.display = format === 'html' ? 'flex' : 'none';
+    htmlInteractiveInput.disabled = busy;
     pdfOptions.style.display = format === 'pdf' ? 'flex' : 'none';
     pdfKeepInput.disabled = busy;
     const notes = {
       png: 'PNG：无损长图；尺寸允许时快速编码，文件可能更大。',
       svg: 'SVG：真实文字＋内嵌图片，推荐浏览器打开；部分看图软件不支持。',
-      html: 'HTML：离线网页，文字可缩放、复制，图片内嵌。',
+      html: 'HTML：文字图片可离线阅读；包含音视频时打包ZIP，解压后打开index.html。',
       pdf: 'PDF：自动分页，使用高清截图排版，文字不可选择。',
       webp: 'WebP：95%质量压缩；超长时可选择分图、缩小或改用PNG。',
     };
@@ -958,10 +1295,10 @@
     const modal = node('div', undefined);
     modal.id = 'zli-preview';
     const box = node('div', undefined, 'zli-preview-box');
-    const format = CONFIG.FORMAT.toUpperCase();
+    const format = results[0]?.extension === 'zip' ? 'ZIP' : CONFIG.FORMAT.toUpperCase();
     const imageFormat = ['PNG', 'WEBP', 'SVG'].includes(format);
     box.append(node('h3', `${format} 已生成`), node('p', info));
-    box.append(node('p', imageFormat ? '预览默认适应窗口，会缩小显示；点击“100%像素查看”检查真实清晰度。下载时保留原始分辨率。' : '点击下载保存离线文件。HTML可用浏览器打开；PDF可用PDF阅读器打开。'));
+    box.append(node('p', imageFormat ? '预览默认适应窗口，会缩小显示；点击“100%像素查看”检查真实清晰度。下载时保留原始分辨率。' : format === 'ZIP' ? '完整解压ZIP后打开 index.html；保持 media 文件夹位置，即可离线播放已下载的音视频。' : '点击下载保存离线文件。HTML可用浏览器打开；PDF可用PDF阅读器打开。'));
     const zoom = node('button', '100%像素查看');
     let actualSize = false;
     zoom.onclick = () => {
@@ -1024,8 +1361,9 @@
     activeQuestion = questionID();
     start.disabled = true;
     splitStart.disabled = true;
-    countInput.disabled = scaleInput.disabled = formatInput.disabled = pdfKeepInput.disabled = true;
+    countInput.disabled = scaleInput.disabled = formatInput.disabled = pdfKeepInput.disabled = htmlInteractiveInput.disabled = true;
     CONFIG.PDF_KEEP_IMAGES = pdfKeepInput.checked;
+    CONFIG.HTML_INTERACTIVE = htmlInteractiveInput.checked;
     cancel.disabled = false;
     document.querySelectorAll('.zli-single-export').forEach(button => { button.disabled = true; });
     const oldScroll = { x: window.scrollX, y: window.scrollY };
@@ -1041,6 +1379,7 @@
         check();
         const item = snapshot(selectedAnswer, 1);
         if (!item) throw new Error('未能读取这条回答的正文，请展开后重试。');
+        await enrichHTMLInteractions(selectedAnswer, item);
         items = [item];
         updateProgress(1, 1);
       } else {
@@ -1063,17 +1402,18 @@
       window.scrollTo(0, 0);
       await pause(150);
       const results = ['png', 'webp'].includes(CONFIG.FORMAT) ? await render(root, mode) : await exportDocument(root, CONFIG.FORMAT);
+      const interactionWarnings = root.querySelectorAll('.zli-incomplete').length;
       if (!results) { finishProgress('cancelled'); report('已取消导出。可以调整格式后重试。'); return; }
       check();
       root.remove();
       root = null;
-      const format = CONFIG.FORMAT.toUpperCase();
-      const details = CONFIG.FORMAT === 'pdf' ? `${results[0].pages} 页高清截图PDF` : ['html', 'svg'].includes(CONFIG.FORMAT) ? '保留真实文字及内嵌图片' : results[0].notice ? `输出 ${results[0].width} × ${results[0].height} 像素；${results[0].notice}` : `输出宽度 ${results[0].width} 像素，${CONFIG.SCALE}倍清晰度，无自动降采样`;
+      const format = results[0]?.extension === 'zip' ? 'ZIP' : CONFIG.FORMAT.toUpperCase();
+      const details = results[0].extension === 'zip' ? `离线HTML＋${results[0].mediaCount}个音视频文件，解压后打开index.html` : CONFIG.FORMAT === 'pdf' ? `${results[0].pages} 页高清截图PDF` : ['html', 'svg'].includes(CONFIG.FORMAT) ? '保留真实文字及内嵌图片' : results[0].notice ? `输出 ${results[0].width} × ${results[0].height} 像素；${results[0].notice}` : `输出宽度 ${results[0].width} 像素，${CONFIG.SCALE}倍清晰度，无自动降采样`;
       finishProgress('ready');
       const bytes = results.reduce((sum, result) => sum + result.blob.size, 0);
-      const info = `共 ${items.length} 条回答，${results.length} ${['png', 'webp'].includes(CONFIG.FORMAT) ? '张' : '个'} ${format}，${details}。耗时 ${elapsedText()}，总大小 ${formatBytes(bytes)}。${failed ? ` ${failed} 张图片加载失败，图中已标记。` : ''}`;
+      const info = `共 ${items.length} 条回答，${results.length} ${['png', 'webp'].includes(CONFIG.FORMAT) ? '张' : '个'} ${format}，${details}。耗时 ${elapsedText()}，总大小 ${formatBytes(bytes)}。${interactionWarnings ? ` 有 ${interactionWarnings} 处交互内容未完整保存，文件内已标注。` : ''}${failed ? ` ${failed} 张图片加载失败，图中已标记。` : ''}`;
       const label = selectedAnswer ? `回答${answerID(selectedAnswer) || '单条'}_含问题` : `前${items.length}条回答`;
-      const filename = `知乎_${activeQuestion}_${label}_${new Date().toISOString().slice(0, 10)}.${CONFIG.FORMAT}`;
+      const filename = `知乎_${activeQuestion}_${label}_${new Date().toISOString().slice(0, 10)}.${results[0].extension || CONFIG.FORMAT}`;
       showPreview(results, filename, info);
       report(info);
     } catch (error) {
@@ -1120,7 +1460,7 @@
     #zli-panel .zli-title{padding-right:22px}#zli-panel .zli-collapse{position:absolute;right:6px;top:6px;width:26px;height:26px;padding:0;margin:0;border:0;border-radius:5px;background:transparent;color:#718096;font:24px/26px sans-serif;text-align:center}#zli-panel .zli-collapse:hover{background:#edf3fc;color:#056de8}
     #zli-launcher{position:fixed;right:20px;bottom:24px;z-index:2147483647;min-width:76px;padding:11px 14px;border:1px solid #056de8;border-radius:24px;background:#056de8;color:#fff;box-shadow:0 3px 14px #0003;cursor:pointer;font:14px/1.5 sans-serif}#zli-launcher:focus-visible,#zli-panel .zli-collapse:focus-visible{outline:3px solid #8cbafb;outline-offset:2px}
     #zli-panel .zli-format-row{display:flex;margin:10px 0 0;gap:8px}#zli-panel .zli-format-row select{flex:1;width:auto}#zli-panel .zli-format-note{font-size:12px;color:#68758a}
-    #zli-panel .zli-pdf-options{display:flex;align-items:flex-start;margin:9px 0 0;gap:7px;white-space:normal}#zli-panel .zli-pdf-options input{width:15px;height:15px;margin-top:3px;flex-shrink:0;accent-color:#056de8}#zli-panel .zli-pdf-options small{display:block;color:#68758a;font-size:11px}
+    #zli-panel :is(.zli-pdf-options,.zli-html-options){display:flex;align-items:flex-start;margin:9px 0 0;gap:7px;white-space:normal}#zli-panel :is(.zli-pdf-options,.zli-html-options) input{width:15px;height:15px;margin-top:3px;flex-shrink:0;accent-color:#056de8}#zli-panel :is(.zli-pdf-options,.zli-html-options) small{display:block;color:#68758a;font-size:11px}
     #zli-progress{margin-top:12px;padding:10px;background:#f2f6fd;border-radius:8px;font-size:12px}#zli-progress[hidden]{display:none}#zli-progress .zli-steps{display:flex;justify-content:space-between;color:#8590a0;font-size:11px;margin-bottom:8px}#zli-progress [data-active=true]{color:#056de8;font-weight:600}#zli-progress [data-done=true]{color:#168457}#zli-progress progress{display:block;width:100%;height:7px;margin:8px 0;accent-color:#056de8}#zli-progress [data-role=time]{color:#68758a}#zli-progress[data-state=error]{background:#fff0ef}#zli-progress[data-state=ready]{background:#edf8f1}.zli-file-size{font-size:12px;color:#68758a;margin-left:8px}
     .zli-single-export{display:inline-block;flex-shrink:0;margin:0 0 0 10px;padding:5px 10px;border:1px solid #b8d4fa;border-radius:5px;background:#eef5ff;color:#056de8;font:13px/1.5 sans-serif;cursor:pointer;vertical-align:middle}.zli-single-export:disabled{opacity:.45;cursor:default}.zli-single-export:focus-visible{outline:2px solid #056de8;outline-offset:2px}
     #zli-stage{position:absolute!important;left:0!important;top:0!important;z-index:2147483646;box-sizing:border-box;background:white;color:#222;font:18px/1.85 -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;padding:36px;pointer-events:none}
@@ -1131,6 +1471,9 @@
     #zli-stage .zli-body *{max-height:none!important}#zli-stage p{margin:0 0 16px}#zli-stage img{max-width:100%!important;height:auto!important;display:block;object-fit:contain;margin:12px auto}
     #zli-stage img[eeimg]{display:inline-block;margin:0;vertical-align:middle}#zli-stage figure{width:auto!important;max-width:100%;margin:18px 0}#zli-stage a{color:#175199;overflow-wrap:anywhere}
     #zli-stage pre{white-space:pre-wrap!important;word-break:break-word;background:#f5f5f5;padding:14px;font:14px/1.6 monospace}#zli-stage blockquote{border-left:4px solid #ddd;padding-left:16px;color:#555}#zli-stage table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:14px}#zli-stage td,#zli-stage th{border:1px solid #ddd;padding:6px;overflow-wrap:anywhere}
+    #zli-stage .zli-media video,#zli-stage .zli-media audio{display:block;width:100%;max-width:100%;margin:12px 0}
+    #zli-stage .zli-annotations{margin-top:24px}#zli-stage .zli-annotations details{border:1px solid #ddd;padding:12px;margin:10px 0;border-radius:6px}
+    #zli-stage .zli-annotations summary{cursor:pointer;color:#175199}#zli-stage .zli-comment{border-top:1px solid #eee;padding:10px 0}#zli-stage .zli-underlined,#zli-stage .zli-original-underline{border-bottom:1px dashed #68758a}
     #zli-stage ul,#zli-stage ol{padding-left:1.8em}#zli-stage .RichText img{max-width:100%!important}#zli-stage .RichText{font-size:18px;line-height:1.85}
     #zli-preview{position:fixed;inset:0;z-index:2147483647;background:#0009;overflow:auto;padding:32px;color:#222;font:14px/1.6 sans-serif}#zli-preview .zli-preview-box{max-width:960px;margin:auto;background:white;padding:20px;border-radius:10px}#zli-preview h3{font-size:20px;font-weight:700}#zli-preview .zli-image-box{overflow:auto;max-height:70vh;margin:12px 0 24px}#zli-preview img{display:block;max-width:100%;height:auto;margin-top:12px}
   `;
@@ -1214,6 +1557,17 @@
   pdfDescription.append(node('small', '放不下移到下一页；超高图片等比缩小'));
   pdfOptions.append(pdfKeepInput, pdfDescription);
   panel.insertBefore(pdfOptions, status);
+  htmlOptions = node('label', undefined, 'zli-html-options');
+  htmlOptions.id = 'zli-html-options';
+  htmlInteractiveInput = node('input'); htmlInteractiveInput.type = 'checkbox';
+  htmlInteractiveInput.id = 'zli-html-interactive';
+  htmlInteractiveInput.setAttribute('aria-label', '包含音视频、划线评论和回复');
+  htmlInteractiveInput.checked = CONFIG.HTML_INTERACTIVE;
+  htmlInteractiveInput.onchange = saveSettings;
+  const htmlDescription = node('span', '包含音视频、划线评论和回复');
+  htmlDescription.append(node('small', '音视频下载到ZIP；单个32MB、合计128MB上限'));
+  htmlOptions.append(htmlInteractiveInput, htmlDescription);
+  panel.insertBefore(htmlOptions, status);
   panel.insertBefore(formatNote, status);
   panel.insertBefore(node('p', '数量、清晰度和格式会自动记住。', 'zli-format-note'), status);
   panel.insertBefore(progressArea, status);
