@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知乎回答长图",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "description": "导出知乎前 X 条或单条回答（含问题），支持 PNG、SVG、HTML、PDF、WebP。作者 jasonLi。",
   "author": "jasonLi",
   "minimum_chrome_version": "114",

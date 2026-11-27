@@ -461,7 +461,11 @@
       record.mark = markSegment(body, record);
       if (record.mark) {
         record.mark.classList.add('zli-underlined');
-        const anchor = node('a', ` [查看段评 ${index}]`); anchor.href = `#${detail.id}`; record.mark.after(anchor);
+        record.mark.setAttribute('aria-controls', detail.id);
+        record.mark.setAttribute('aria-haspopup', 'dialog');
+        record.mark.setAttribute('aria-expanded', 'false');
+        record.mark.setAttribute('role', 'button'); record.mark.tabIndex = 0;
+        record.mark.title = '查看段落评论和回复';
       }
       if (record.text) detail.append(node('blockquote', record.text));
       const roots = await commentPages(`/api/v4/comment_v5/answers/${aid}/segment/root_comment?segment_id=${encodeURIComponent(record.id)}&limit=20&offset=`, budget);
@@ -1142,6 +1146,109 @@
     return new Blob([...chunks, ...central, end], { type: 'application/zip' });
   }
 
+  // 仅此固定脚本会写入导出HTML，其SHA-256绑定到CSP；不保留知乎代码。
+  function offlineRuntime() {
+    'use strict';
+    const root = document.getElementById('zli-stage');
+    if (!root) return;
+    let active, popover;
+    const close = (focus = false) => {
+      popover?.remove(); popover = null;
+      if (active) { active.setAttribute('aria-expanded', 'false'); if (focus) active.focus(); }
+      active = null;
+    };
+    const place = () => {
+      if (!active || !popover) return;
+      const rect = active.getBoundingClientRect();
+      const width = Math.min(440, window.innerWidth - 24);
+      popover.style.width = `${width}px`;
+      popover.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+      const height = popover.getBoundingClientRect().height;
+      const below = rect.bottom + 10;
+      popover.style.top = `${Math.max(12, below + height <= window.innerHeight - 12 ? below : Math.min(rect.top - height - 10, window.innerHeight - height - 12))}px`;
+    };
+    const open = marker => {
+      const id = marker.getAttribute('aria-controls'), detail = document.getElementById(id || '');
+      if (!detail?.closest('.zli-annotations')) return;
+      if (active === marker) { close(true); return; }
+      close(); active = marker; marker.setAttribute('aria-expanded', 'true');
+      popover = document.createElement('aside'); popover.id = 'zli-comment-popover';
+      popover.setAttribute('role', 'dialog'); popover.setAttribute('aria-label', '段落评论和回复');
+      const toolbar = document.createElement('div'); toolbar.className = 'zli-popover-toolbar';
+      const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = '复制原文';
+      copy.addEventListener('click', async () => {
+        const text = detail.querySelector('blockquote')?.textContent || marker.textContent;
+        try { await navigator.clipboard.writeText(text); copy.textContent = '已复制'; }
+        catch { copy.textContent = '请选择原文复制'; }
+      });
+      const count = document.createElement('span'); count.textContent = `${detail.querySelectorAll('.zli-comment').length} 条评论/回复`;
+      const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = '×'; dismiss.setAttribute('aria-label', '关闭段落评论');
+      dismiss.addEventListener('click', () => close(true)); toolbar.append(copy, count, dismiss);
+      const body = document.createElement('div'); body.className = 'zli-popover-body';
+      const quote = document.createElement('blockquote'); quote.textContent = detail.querySelector('blockquote')?.textContent || marker.textContent;
+      body.append(quote);
+      const label = document.createElement('p'); label.className = 'zli-popover-snapshot'; label.textContent = '导出时保存的评论'; body.append(label);
+      for (const child of detail.children) if (!child.matches('summary,blockquote')) body.append(child.cloneNode(true));
+      popover.append(toolbar, body); document.body.append(popover); place();
+    };
+    const markers = root.querySelectorAll('.zli-underlined[aria-controls]');
+    for (const marker of markers) {
+      marker.addEventListener('click', event => { event.preventDefault(); open(marker); });
+      marker.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(marker); } });
+    }
+    if (markers.length) {
+      root.classList.add('zli-interactive-ready');
+      const linked = new Set([...markers].map(marker => marker.getAttribute('aria-controls')));
+      for (const section of root.querySelectorAll('.zli-annotations')) {
+        if ([...section.querySelectorAll(':scope > details')].every(detail => linked.has(detail.id))) section.classList.add('zli-popup-only');
+      }
+    }
+    document.addEventListener('pointerdown', event => { if (popover && !popover.contains(event.target) && !active?.contains(event.target)) close(); });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') close(true); });
+    window.addEventListener('resize', place); window.addEventListener('scroll', place, { passive: true });
+    for (const player of root.querySelectorAll('.zli-media video,.zli-media audio')) {
+      const box = player.closest('.zli-media'), src = player.getAttribute('src') || '';
+      if (!/^media\/media-\d+\.[a-z0-9]+$/.test(src)) continue;
+      const actions = document.createElement('div'); actions.className = 'zli-media-actions';
+      const direct = document.createElement('a'); direct.href = src; direct.target = '_blank'; direct.rel = 'noopener noreferrer'; direct.textContent = '直接打开音视频文件';
+      const status = document.createElement('p'); status.className = 'zli-playback-status'; status.setAttribute('role', 'status');
+      actions.append(direct, status); box.append(actions);
+      const update = () => {
+        if (player.error) {
+          const reason = ({1:'播放已中止',2:'本地文件读取失败',3:'浏览器无法解码这个文件',4:'文件未找到或浏览器不支持该格式'})[player.error.code] || '播放失败';
+          status.textContent = `${reason}。请先完整解压ZIP，确保index.html旁有media文件夹；也可点击上方链接直接打开视频或用系统播放器播放。`;
+          status.classList.add('zli-playback-error');
+        } else if (player.readyState >= 1) {
+          status.classList.remove('zli-playback-error');
+          const duration = player.duration;
+          status.textContent = Number.isFinite(duration) ? `时长 ${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')} · 点击播放器播放` : '已读取本地音视频 · 点击播放器播放';
+        } else status.textContent = '正在读取本地音视频；请确保已完整解压ZIP。';
+      };
+      for (const event of ['loadedmetadata', 'canplay', 'error', 'abort']) player.addEventListener(event, update);
+      update();
+    }
+  }
+  function offlineRuntimeStyles() {
+    return `
+      #zli-stage .zli-underlined{border-bottom:1px dotted #8b95a5;cursor:pointer;outline-offset:4px}
+      #zli-stage .zli-underlined::after{content:'';display:inline-block;width:9px;height:7px;border:1px solid #9ba3af;border-radius:3px;margin:0 4px 0 5px;vertical-align:middle}
+      #zli-stage .zli-underlined:hover,#zli-stage .zli-underlined[aria-expanded=true]{background:#e7f0ff}
+      #zli-stage.zli-interactive-ready .zli-annotations.zli-popup-only{display:none}
+      #zli-comment-popover{position:fixed;z-index:2147483647;box-sizing:border-box;border-radius:9px;background:#fff;color:#222;box-shadow:0 6px 30px #0003;border:1px solid #ddd;font:14px/1.7 system-ui,sans-serif;overflow:hidden}
+      #zli-comment-popover *{box-sizing:border-box}
+      .zli-popover-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;background:#53565e;color:#fff}
+      .zli-popover-toolbar button{border:0;background:transparent;color:#fff;cursor:pointer;padding:4px 8px;font:inherit;border-radius:4px}
+      .zli-popover-toolbar button:hover{background:#ffffff25}.zli-popover-toolbar button:focus-visible{outline:2px solid #fff}
+      .zli-popover-body{padding:14px 16px;max-height:min(55vh,460px);overflow:auto;overflow-wrap:anywhere}
+      .zli-popover-body blockquote{margin:0 0 10px;border-left:3px solid #ddd;padding-left:10px;color:#667085}
+      .zli-popover-body p{margin:8px 0}.zli-popover-body .zli-meta,.zli-popover-snapshot{font-size:12px;color:#8491a3}
+      .zli-popover-body .zli-comment{border-top:1px solid #eee;padding:10px 0}.zli-popover-body details{padding:7px;background:#f6f8fa;border-radius:5px}
+      .zli-popover-body summary{cursor:pointer;color:#175199}.zli-popover-body a{color:#175199}.zli-popover-body .zli-note{background:#fff6df;padding:8px;color:#775416}
+      #zli-stage .zli-playback-status{font-size:13px;color:#667085;margin:6px 0 12px}
+      #zli-stage .zli-playback-error{padding:10px;background:#fff6df;color:#775416}
+    `;
+  }
+
   function portableDocument(root, mediaFiles = []) {
     const mediaPaths = new Set(mediaFiles.map(file => file.name));
     const copy = root.cloneNode(true);
@@ -1208,10 +1315,16 @@
         const csp = doc.createElement('meta'); csp.httpEquiv = 'Content-Security-Policy';
         csp.content = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; media-src 'self' file: data:; font-src 'none'; base-uri 'none'; form-action 'none'";
         const viewport = doc.createElement('meta'); viewport.name = 'viewport'; viewport.content = 'width=device-width, initial-scale=1';
-        const style = doc.createElement('style'); style.textContent = styles;
+        const style = doc.createElement('style'); style.textContent = styles + offlineRuntimeStyles();
         doc.head.prepend(charset, csp, viewport); doc.head.append(style); doc.body.append(copy);
         // 在惰性导出文档里设置预加载；解压打开后才读取本地媒体。
         copy.querySelectorAll('.zli-media video,.zli-media audio').forEach(player => { player.preload = 'metadata'; });
+        const runtime = doc.createElement('script'); runtime.id = 'zli-offline-runtime';
+        runtime.textContent = `(${offlineRuntime.toString()})();`.replace(/\r\n?/g, '\n');
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(runtime.textContent)));
+        const hash = btoa(String.fromCharCode(...digest));
+        csp.content += `; script-src 'sha256-${hash}'`;
+        doc.body.append(runtime);
         const html = new Blob(['<!doctype html>\n', doc.documentElement.outerHTML], { type: 'text/html;charset=utf-8' });
         if (bundle.hasMedia) {
           report('正在打包离线HTML和音视频…');

@@ -109,7 +109,7 @@ const fixture = `<!doctype html><meta charset="utf-8"><h1 class="QuestionHeader-
     const extracted=path.join(output,'interactive-extracted');fs.mkdirSync(extracted,{recursive:true});
     for(const [name,data] of entries) {const target=path.join(extracted,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,data);}
     assert.deepEqual(entries.get('media/media-001.wav'),wave);
-    assert.ok(!/<script\b|\son\w+=|javascript:/i.test(html));
+    assert.ok(!/\son\w+=|javascript:/i.test(html));assert.equal((html.match(/<script\b/g)||[]).length,1);assert.match(html,/script-src &#39;sha256-|script-src 'sha256-/);
     assert.match(html,/有|根评论正文/); assert.match(html,/回复未|已保存/);
     assert.match(await page.locator('#zli-preview').innerText(),/未完整保存/);
     const offline=await browser.newPage();
@@ -127,15 +127,20 @@ const fixture = `<!doctype html><meta charset="utf-8"><h1 class="QuestionHeader-
     await offline.waitForFunction(()=>document.querySelector('video').readyState>=1);
     assert.equal(await offline.locator('.zli-underlined').count(),3,'段评位置可在副本中映射');
     const details=offline.locator('.zli-annotations > details'); assert.equal(await details.count(),3);
-    await details.first().locator(':scope > summary').click();
-    assert.equal(await details.first().getAttribute('open'),'');
-    assert.match(await details.first().innerText(),/根评论正文/);
-    const replies=details.first().locator('.zli-replies');await replies.locator('summary').click();
+    await offline.locator('.zli-underlined').first().click();
+    const popup=offline.locator('#zli-comment-popover');await popup.waitFor();
+    assert.match(await popup.innerText(),/根评论正文/);
+    const replies=popup.locator('.zli-replies');await replies.locator('summary').click();
     assert.match(await replies.innerText(),/回复第二页/);assert.match(await replies.innerText(),/回复 楼主/);
-    assert.equal(await details.first().locator('.zli-comment').count(),5,'2根评论+3回复，重复条目必须去重');
-    await offline.locator('a[href="#zli-segment-303-1"]').click();
-    assert.equal(new URL(offline.url()).hash,'#zli-segment-303-1');
-    await offline.screenshot({path:path.join(output,'interactive-html.png'),fullPage:true});await offline.close();
+    assert.equal(await popup.locator('.zli-comment').count(),5,'2根评论+3回复，重复条目必须去重');
+    assert.equal(await offline.locator('a[href^="#zli-segment"]').count(),0);
+    await offline.keyboard.press('Escape');await popup.waitFor({state:'detached'});
+    await offline.locator('.zli-underlined').first().focus();await offline.keyboard.press('Enter');await popup.waitFor();
+    await offline.screenshot({path:path.join(output,'interactive-html.png'),fullPage:true});
+    await offline.locator('audio').evaluate(player=>{player.src='media/missing.wav';player.load();});
+    await offline.waitForFunction(()=>document.querySelector('.zli-playback-error')?.textContent.includes('完整解压ZIP'));
+    assert.equal(await offline.getByRole('link',{name:'直接打开音视频文件',exact:true}).count(),3);
+    await offline.close();
     await page.getByRole('button',{name:'关闭',exact:true}).click();
     if(!extensionMode) {
       await page.evaluate(()=>{window.mediaAborted=false;window.GM_xmlhttpRequest=()=>({abort(){window.mediaAborted=true;}});});
@@ -152,6 +157,6 @@ const fixture = `<!doctype html><meta charset="utf-8"><h1 class="QuestionHeader-
     requests.length=0;
     const staticHTML=(await exportHTML()).toString('utf8');assert.equal(requests.length,0,'关闭交互后不得请求段评/播放信息');
     assert.ok(!/<audio\b|<video\b|class="zli-annotations"/.test(staticHTML));
-    console.log('PASS: HTML专属选项和记忆、ZIP CRC和目录、真实音视频离线解码/失效入口、段评与回复分页去重、状态位置映射、失败摘要、无脚本和跟踪图、离线展开、关闭后零额外请求。');
+    console.log('PASS: HTML专属选项和记忆、ZIP CRC和目录、真实音视频离线解码/失效入口、段评与回复分页去重、状态位置映射、失败摘要、仅哈希离线脚本、无站点事件和跟踪图、离线展开、关闭后零额外请求。');
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

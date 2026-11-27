@@ -160,7 +160,7 @@ function inspectPNG(buffer) {
       if (format === 'html' || format === 'svg') {
         const text = data.toString('utf8');
         assert.ok(text.includes('QUESTION-DESCRIPTION') && text.includes('END-102') && !text.includes('END-101'));
-        assert.ok(!/<script\b/i.test(text) && !/\son[a-z]+=/i.test(text), '导出静态文件不应保留脚本和事件');
+        assert.ok(!/\son[a-z]+=/i.test(text), '导出文件不应保留站点事件');assert.equal((text.match(/<script\b/g)||[]).length,format==='html'?1:0);
         const offline = await context.newPage();
         if (format === 'html') {
           await offline.setContent(text);
