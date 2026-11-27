@@ -33,8 +33,8 @@ git push -u origin main
 ## 让别人一键安装油猴脚本
 
 1. 将源码上传到自己的仓库，保留 `.github/workflows/release.yml`。
-2. 推送与版本对应的标签，例如 `v1.8.0`，等待Release工作流成功。
-3. 分发Release中的 `zhihu-long-image.user.js` 或安装指南页面的链接。
+2. 推送与版本对应的标签，例如 `v1.8.0`，等待 [Release 工作流](https://github.com/3310043933/zhihu-long-image/actions/workflows/release.yml) 成功。
+3. 分发 [Release](https://github.com/3310043933/zhihu-long-image/releases/latest) 中的 [zhihu-long-image.user.js](https://github.com/3310043933/zhihu-long-image/releases/latest/download/zhihu-long-image.user.js) 或安装指南页面的链接。
 
 工作流使用 `GITHUB_REPOSITORY` 自动绑定实际账号和仓库，生成稳定的下载地址及独立 `.meta.js` 更新地址。用户从该Release安装一次后，Tampermonkey可按其更新设置自动检查新版本。不要将源码中未绑定的Raw脚本宣传为已经配置在线自动更新。
 
@@ -77,7 +77,7 @@ git push origin v1.8.0
 
 ## Chrome Web Store
 
-从 GitHub 下载 ZIP 后“加载已解压的扩展”属于开发者模式安装。让普通用户从商店直接安装，需要维护者另行上架：
+从 [GitHub Releases](https://github.com/3310043933/zhihu-long-image/releases/latest) 下载 ZIP 后“加载已解压的扩展”属于开发者模式安装。让普通用户从商店直接安装，需要维护者另行上架：
 
 1. 使用自己的 Google 账号注册 [Chrome Web Store 开发者账号](https://developer.chrome.com/docs/webstore/register)，按当时要求完成注册、费用及验证。
 2. 在开发者控制台新建项目，上传 `dist/zhihu-long-image-extension-v1.8.0.zip`。

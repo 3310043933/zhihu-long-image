@@ -36,14 +36,14 @@
 
 ## 安装油猴脚本
 
-推荐通过安装指南或最新Release中的 `zhihu-long-image.user.js` 安装。GitHub Actions生成的发布包自动包含真实仓库的 `@updateURL` 和 `@downloadURL`；后续由Tampermonkey按用户的更新设置检查版本。当前本地包尚未绑定仓库，不会假装已经具备在线更新地址。手动绑定方法见[PUBLISHING.md](PUBLISHING.md)。
+推荐通过安装指南或[最新 Release](https://github.com/3310043933/zhihu-long-image/releases/latest) 中的 [zhihu-long-image.user.js](https://github.com/3310043933/zhihu-long-image/releases/latest/download/zhihu-long-image.user.js) 安装。GitHub Actions生成的发布包自动包含真实仓库的 `@updateURL` 和 `@downloadURL`；后续由Tampermonkey按用户的更新设置检查版本。当前本地包尚未绑定仓库，不会假装已经具备在线更新地址。手动绑定方法见[PUBLISHING.md](PUBLISHING.md)。
 
 1. 在桌面浏览器安装 [Tampermonkey](https://www.tampermonkey.net/)。
 2. 打开仓库里的 [`zhihu-long-image.user.js`](zhihu-long-image.user.js)，点击 GitHub 的 **Raw**。如果 Tampermonkey 弹出安装页，点击安装。
 3. 如果没有自动出现安装页：Tampermonkey 管理面板 → 添加新脚本 → 删除默认内容 → 粘贴 `.user.js` 全部内容 → 保存。
 4. 打开知乎提问页面，选择需要的回答排序，使用右下角的导出面板。
 
-也可以从项目的 **Releases** 下载同名 `.user.js` 文件后导入。浏览器可能要求开启“允许用户脚本”或扩展开发者相关开关，按 Tampermonkey 提示操作。
+也可以从项目的 **[Releases](https://github.com/3310043933/zhihu-long-image/releases/latest)** 下载同名 `.user.js` 文件后导入。浏览器可能要求开启“允许用户脚本”或扩展开发者相关开关，按 Tampermonkey 提示操作。
 
 油猴版首次使用的默认值在脚本顶部 `CONFIG` 中配置；之后优先恢复已保存的偏好。页面面板修改会自动记忆。
 
@@ -58,7 +58,7 @@ EXPORT_MODE: 'single', // 一张长图；'split' 为高清分图
 
 目前提供**本地加载版**，不是 Chrome 应用商店上架版本。
 
-1. 在 **Releases** 下载 `zhihu-long-image-extension-v1.8.0.zip` 并解压。
+1. 在 **[Releases](https://github.com/3310043933/zhihu-long-image/releases/latest)** 下载 [zhihu-long-image-extension.zip](https://github.com/3310043933/zhihu-long-image/releases/latest/download/zhihu-long-image-extension.zip) 并解压。
 2. Chrome 打开 `chrome://extensions/`；Edge 打开 `edge://extensions/`。
 3. 开启开发者模式 → 加载已解压的扩展程序 → 选择包含 `manifest.json` 的文件夹。
 4. 刷新已打开的知乎页面，进入普通提问的回答列表页。
