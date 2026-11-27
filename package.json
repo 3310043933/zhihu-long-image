@@ -1,6 +1,6 @@
 {
   "name": "zhihu-long-image",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "private": true,
   "description": "知乎前 X 条回答导出高清长图，提供油猴脚本和 Chrome Manifest V3 扩展",
   "author": "jasonLi",

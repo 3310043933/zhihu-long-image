@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         知乎前 X 条回答导出长图
 // @namespace    local.zhihu.long-image
-// @version      1.9.0
+// @version      1.9.1
 // @author       jasonLi
 // @description  导出前 X 条或单条知乎回答（含问题），支持 PNG、SVG、HTML、PDF、WebP
 // @match        https://www.zhihu.com/*
@@ -226,8 +226,19 @@
     body.classList.add('zli-body');
     body.querySelectorAll('script, style, noscript, button, .ContentItem-actions, .RichContent-actions').forEach(el => el.remove());
     const originalMedia = [...content.querySelectorAll('video, iframe, audio, canvas')];
-    body.querySelectorAll('video, iframe, audio, canvas').forEach((el, index) => el.replaceWith(htmlInteractive() && /^(video|audio)$/.test(el.localName)
-      ? mediaCopy(originalMedia[index]) : node('p', '【视频、音频或交互内容，请打开原回答查看】', 'zli-note')));
+    originalMedia.forEach(original => {
+      let container = original;
+      // 知乎的原生video深藏在封面/控制条容器中；替换整个最小播放器，避免导出重复封面与控件。
+      if (htmlInteractive() && /^(video|audio)$/.test(original.localName)) {
+        for (let ancestor = original.parentElement; ancestor && ancestor !== content; ancestor = ancestor.parentElement) {
+          if (ancestor.matches('p,figure,blockquote,pre,.RichText') || ancestor.querySelector('p,blockquote,pre,h1,h2,h3') || ancestor.querySelectorAll('video,audio,iframe,canvas').length !== 1) break;
+          if (ancestor.querySelector('img') && textOf(ancestor).length < 100) { container = ancestor; break; }
+        }
+      }
+      const copy = copies[originals.indexOf(container)];
+      if (copy && body.contains(copy)) copy.replaceWith(htmlInteractive() && /^(video|audio)$/.test(original.localName)
+        ? mediaCopy(original, container) : node('p', '【视频、音频或交互内容，请打开原回答查看】', 'zli-note'));
+    });
     copiedImages.forEach((img, index) => {
       const original = sourceImages[index];
       const lazyURL = original?.getAttribute('data-original') || original?.getAttribute('data-actualsrc') || original?.getAttribute('data-src');
@@ -272,7 +283,7 @@
     link.href = `https://www.zhihu.com/question/${activeQuestion}${id ? `/answer/${id}` : ''}`;
     return link;
   }
-  function mediaCopy(original) {
+  function mediaCopy(original, container = original.parentElement) {
     const box = node('figure', undefined, 'zli-media');
     const tag = original.localName === 'audio' ? 'audio' : 'video';
     const sources = [original.currentSrc, original.getAttribute('src'), ...[...original.querySelectorAll('source')].map(s => s.src)]
@@ -282,6 +293,11 @@
       for (const src of [...new Set(sources)]) { const source = node('source'); source.src = src; player.append(source); }
       box.append(player, node('figcaption', sources.every(s => s.startsWith('data:')) ? '内嵌音视频' : '音视频需联网播放，链接可能过期；无法播放时请打开原回答。', 'zli-note'));
     } else box.append(node('p', '未能读取可播放地址（可能是临时 blob、加密或尚未加载的媒体），请打开原回答播放。', 'zli-note zli-incomplete'));
+    const cover = original.poster || container?.querySelector('img')?.currentSrc || container?.querySelector('img')?.getAttribute('src');
+    if (tag === 'video' && cover && /^(https:|data:image\/)/.test(cover)) {
+      const image = node('img'); image.className = 'zli-media-poster'; image.alt = '视频封面'; image.src = cover;
+      box.append(image);
+    }
     box.append(originalLink(''));
     return box;
   }
@@ -384,33 +400,56 @@
       const mark = node('span'); mark.append(range.extractContents()); range.insertNode(mark); return mark;
     } catch { return null; }
   }
-  async function enrichHTMLInteractions(answer, item) {
+  function videoCardID(card) {
+    const explicit = card.getAttribute('data-video-id') || card.getAttribute('data-lens-id');
+    if (/^\d+$/.test(explicit || '')) return explicit;
+    try {
+      let url = new URL(card.getAttribute('href'), location.href);
+      if (url.hostname === 'link.zhihu.com') url = new URL(url.searchParams.get('target'));
+      if (url.origin === 'https://www.zhihu.com') return url.pathname.match(/^\/video\/(\d+)\/?$/)?.[1] || '';
+    } catch { /* 未知卡片 */ }
+    return '';
+  }
+  async function resolveHTMLVideoCards(body, contentId, contentType) {
     if (!htmlInteractive()) return;
-    const aid = answerID(answer), body = item.querySelector('.zli-body');
-    if (!body) return;
-    body.querySelectorAll('.zli-media > a').forEach(link => { link.href = originalLink(aid).href; });
     // 知乎视频卡片尚未创建video时，通过播放信息接口读取地址；不请求视频文件本身。
-    for (const card of [...body.querySelectorAll('a.video-box, a[data-video-id], a[href*="zhihu.com/video/"]')]) {
+    for (const card of [...body.querySelectorAll('a.video-box, [data-video-id], [data-lens-id], a[href*="zhihu.com/video/"]')]) {
       check();
-      const id = card.getAttribute('data-video-id') || (card.getAttribute('href') || '').match(/\/video\/(\d+)/)?.[1];
-      if (!/^\d+$/.test(id || '') || !aid) continue;
+      const id = videoCardID(card);
+      if (!/^\d+$/.test(id || '') || !contentId || card.closest('.zli-media')) continue;
       const box = node('figure', undefined, 'zli-media');
       try {
         report('正在读取视频播放入口…');
-        const info = await readZhihuJSON(`/api/v4/video/play_info?r=${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-app-za': 'OS=webplayer' }, body: JSON.stringify({ content_id: aid, content_type_str: 'answer', video_id: id, scene_code: 'answer_detail_web', is_only_video: true }) });
+        const info = await readZhihuJSON(`/api/v4/video/play_info?r=${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-app-za': 'OS=webplayer' }, body: JSON.stringify({ content_id: contentId, content_type_str: contentType, video_id: id, scene_code: 'answer_detail_web', is_only_video: true }) });
         const choices = info.video_play?.playlist?.mp4 || [];
         const selected = [...choices].sort((a, b) => Number(b.bitrate) - Number(a.bitrate)).flatMap(choice => Array.isArray(choice.url) ? choice.url : [choice.url]).map(mediaURL).find(Boolean);
         if (!selected) throw new Error('播放地址不可用');
         const player = node('video'); player.controls = true; player.preload = 'none'; player.src = selected;
         box.append(player, node('p', '视频需联网播放，链接可能过期；无法播放时请打开原回答。', 'zli-note'));
       } catch { check(); box.append(node('p', '未能读取视频地址，请打开原回答播放。', 'zli-note zli-incomplete')); }
-      box.append(originalLink(aid)); card.replaceWith(box);
+      box.append(originalLink(contentType === 'answer' ? contentId : '')); card.replaceWith(box);
     }
-    const records = new Map(), attrs = ['data-segment-id', 'data-seg-id', 'data-segid', 'data-annotation-id'];
+  }
+
+  async function enrichHTMLInteractions(answer, item) {
+    if (!htmlInteractive()) return;
+    const aid = answerID(answer), body = item.querySelector('.zli-body');
+    if (!body) return;
+    body.querySelectorAll('.zli-media > a').forEach(link => { link.href = originalLink(aid).href; });
+    await resolveHTMLVideoCards(body, aid, 'answer');
+    const records = new Map(), attrs = ['data-segment-id', 'data-seg-id', 'data-segid', 'data-annotation-id', 'data-highlight-id'];
     for (const mark of body.querySelectorAll(attrs.map(attr => `[${attr}]`).join(','))) {
       if (records.size >= 100) break;
-      const id = attrs.map(attr => mark.getAttribute(attr)).find(Boolean);
-      if (/^[\w-]{1,160}$/.test(id)) records.set(id, { id, text: textOf(mark), mark });
+      const raw = attrs.map(attr => mark.getAttribute(attr)).find(Boolean);
+      const id = raw?.split('#g#')[0];
+      if (/^[\w-]{1,160}$/.test(id || '')) {
+        let position;
+        try {
+          const parts = JSON.parse(decodeURIComponent(raw.split('#g#')[1] || 'null'));
+          if (Array.isArray(parts) && parts.length === 4) position = {start:{paragraph_id:parts[0],offset:parts[1]},end:{paragraph_id:parts[2],offset:parts[3]}};
+        } catch { /* 仍可使用段评ID和原文 */ }
+        records.set(id, { id, text: textOf(mark), mark, position });
+      }
     }
     // 仅查看当前回答的初始状态，避免把其他回答的段评错误关联。
     try {
@@ -507,9 +546,10 @@
     const description = document.querySelector('.QuestionHeader-detail .RichText')
       || document.querySelector('.QuestionRichText .RichText')
       || document.querySelector('.QuestionHeader-detail');
-    if (description && textOf(description)) {
+    if (description && (textOf(description) || description.querySelector('video,audio,.video-box,[data-lens-id]'))) {
       const body = cloneContent(description);
       body.classList.add('zli-question-description');
+      await resolveHTMLVideoCards(body, activeQuestion, 'question');
       header.append(body);
     }
     header.append(node('p', `${single ? '单条回答导出' : '页面当前排序'} · ${new Date().toLocaleString()}`, 'zli-meta'));
@@ -1086,7 +1126,11 @@
       if (saved) {
         player.removeAttribute('src'); player.querySelectorAll('source').forEach(source => source.remove());
         player.setAttribute('src', saved.name);
-        box.append(node('figcaption', `已下载，可离线播放 · ${formatBytes(saved.blob.size)}`));
+        player.preload = 'none'; // 页面仍在知乎，离线相对路径不能在这里触发请求。
+        const poster = box.querySelector('.zli-media-poster');
+        if (poster?.src.startsWith('data:image/')) player.poster = poster.src;
+        poster?.remove();
+        box.append(node('figcaption', `文件已保存 · ${formatBytes(saved.blob.size)} · 解压ZIP后打开index.html播放，也可直接打开media中的文件。`));
       } else player.replaceWith(node('p', `音视频未能下载：${lastError?.message || '地址不可用'}。请打开原回答播放。`, 'zli-note zli-incomplete'));
     }
     return { files, hasMedia: players.length > 0 };
@@ -1126,11 +1170,12 @@
       const visual = ['opacity', 'filter', 'mix-blend-mode'].map(property => [property, el.style.getPropertyValue(property)]);
       // 离线文件只保留静态内容，不携带站点埋点、事件或外部资源。
       for (const attr of [...el.attributes]) {
-        if (/^on/i.test(attr.name) || attr.name.startsWith('data-') || ['srcset', 'style', 'contenteditable', 'poster', 'background'].includes(attr.name)) el.removeAttribute(attr.name);
+        if (/^on/i.test(attr.name) || attr.name.startsWith('data-') || ['srcset', 'style', 'contenteditable', 'background'].includes(attr.name)) el.removeAttribute(attr.name);
       }
       for (const [property, value] of visual) {
         if (value && !/url\s*\(|[<>]/i.test(value)) el.style.setProperty(property, value, 'important');
       }
+      if (el.hasAttribute('poster') && !(el.tagName === 'VIDEO' && /^data:image\//i.test(el.getAttribute('poster') || ''))) el.removeAttribute('poster');
       const src = el.getAttribute('src') || '';
       const media = htmlInteractive() && /^(AUDIO|VIDEO|SOURCE)$/.test(el.tagName) && el.closest('.zli-media') && (mediaURL(src)?.startsWith('data:') || mediaPaths.has(src));
       if (el.hasAttribute('src') && !(el.tagName === 'IMG' && /^data:image\//i.test(src)) && !media) el.removeAttribute('src');
@@ -1185,6 +1230,8 @@
         const viewport = doc.createElement('meta'); viewport.name = 'viewport'; viewport.content = 'width=device-width, initial-scale=1';
         const style = doc.createElement('style'); style.textContent = styles;
         doc.head.prepend(charset, csp, viewport); doc.head.append(style); doc.body.append(copy);
+        // 在惰性导出文档里设置预加载；解压打开后才读取本地媒体。
+        copy.querySelectorAll('.zli-media video,.zli-media audio').forEach(player => { player.preload = 'metadata'; });
         const html = new Blob(['<!doctype html>\n', doc.documentElement.outerHTML], { type: 'text/html;charset=utf-8' });
         if (bundle.hasMedia) {
           report('正在打包离线HTML和音视频…');
@@ -1472,7 +1519,7 @@
     #zli-stage img[eeimg]{display:inline-block;margin:0;vertical-align:middle}#zli-stage figure{width:auto!important;max-width:100%;margin:18px 0}#zli-stage a{color:#175199;overflow-wrap:anywhere}
     #zli-stage pre{white-space:pre-wrap!important;word-break:break-word;background:#f5f5f5;padding:14px;font:14px/1.6 monospace}#zli-stage blockquote{border-left:4px solid #ddd;padding-left:16px;color:#555}#zli-stage table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:14px}#zli-stage td,#zli-stage th{border:1px solid #ddd;padding:6px;overflow-wrap:anywhere}
     #zli-stage .zli-media video,#zli-stage .zli-media audio{display:block;width:100%;max-width:100%;margin:12px 0}
-    #zli-stage .zli-annotations{margin-top:24px}#zli-stage .zli-annotations details{border:1px solid #ddd;padding:12px;margin:10px 0;border-radius:6px}
+    #zli-stage .zli-media video{background:#000}#zli-stage .zli-annotations{margin-top:24px}#zli-stage .zli-annotations details{border:1px solid #ddd;padding:12px;margin:10px 0;border-radius:6px}
     #zli-stage .zli-annotations summary{cursor:pointer;color:#175199}#zli-stage .zli-comment{border-top:1px solid #eee;padding:10px 0}#zli-stage .zli-underlined,#zli-stage .zli-original-underline{border-bottom:1px dashed #68758a}
     #zli-stage ul,#zli-stage ol{padding-left:1.8em}#zli-stage .RichText img{max-width:100%!important}#zli-stage .RichText{font-size:18px;line-height:1.85}
     #zli-preview{position:fixed;inset:0;z-index:2147483647;background:#0009;overflow:auto;padding:32px;color:#222;font:14px/1.6 sans-serif}#zli-preview .zli-preview-box{max-width:960px;margin:auto;background:white;padding:20px;border-radius:10px}#zli-preview h3{font-size:20px;font-weight:700}#zli-preview .zli-image-box{overflow:auto;max-height:70vh;margin:12px 0 24px}#zli-preview img{display:block;max-width:100%;height:auto;margin-top:12px}

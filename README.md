@@ -196,3 +196,5 @@ PDF依赖jsPDF4.2.1（MIT），版权声明见 [jsPDF许可](extension/vendor/js
 
 
 可选HTML交互回归检查：`node tests/html-interactions.cjs`（使用与browser-smoke相同的Playwright环境变量；设置 `ZLI_TEST_EXTENSION=1` 可验证扩展版）。覆盖音视频控件、段评/回复分页去重、段落位置映射、受限内容提示、离线展开和选项记忆。
+
+真实结构回归：`node tests/real-dom-media.cjs`，覆盖问题视频容器、`data-highlight-id`、`data-lens-id`与跳转链接，并检查解压后的本地媒体时长和播放。可用`ZLI_REAL_VIDEO_FILE`指定本地测试视频；测试不会把用户媒体纳入源码。
